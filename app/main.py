@@ -3,6 +3,7 @@ from datetime import timezone
 from pydantic import BaseModel
 from pathlib import Path
 from fastapi import FastAPI, Depends, File, Form, UploadFile, HTTPException, BackgroundTasks, Request
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse
 from sqlalchemy.orm import Session
 from .config import settings
@@ -12,7 +13,9 @@ from .ai import analyze_image
 from .crosscheck import cross_check, nearby_help
 from fastapi.concurrency import run_in_threadpool
 from .speech import transcribe_audio
+from .response_plan import generate_response_plan
 app = FastAPI(title="Disaster Incident Reports")
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 class ReviewUpdate(BaseModel):
     review_status: str
 Path(settings.storage_dir).mkdir(parents=True, exist_ok=True)
@@ -38,7 +41,8 @@ def health(): return {"status":"ok"}
 async def transcribe(request: Request, audio: UploadFile|None=File(None)):
     if not settings.assemblyai_api_key: raise HTTPException(503, "Speech transcription is not configured")
     if audio is not None:
-        if audio.content_type not in {"audio/webm", "audio/wav", "audio/mpeg", "audio/mp4", "audio/ogg"}: raise HTTPException(415, "Unsupported audio format")
+        allowed_audio = ("audio/webm", "audio/wav", "audio/x-wav", "audio/mpeg", "audio/mp4", "audio/ogg")
+        if not audio.content_type or not any(audio.content_type.lower().startswith(mime) for mime in allowed_audio): raise HTTPException(415, "Unsupported audio format")
         data = await audio.read()
     else:
         data = await request.body()
@@ -88,9 +92,21 @@ def admin_context(report_id: uuid.UUID, db: Session=Depends(get_db)):
     if not r: raise HTTPException(404, "Report not found")
     created = r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
     return {"report_id": str(r.id), **cross_check(r.latitude, r.longitude, created.date()), **nearby_help(r.latitude, r.longitude)}
+@app.get("/api/admin/reports/{report_id}/response-plan")
+def admin_response_plan(report_id: uuid.UUID, db: Session=Depends(get_db)):
+    r = db.get(Report, report_id)
+    if not r: raise HTTPException(404, "Report not found")
+    created = r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
+    context = cross_check(r.latitude, r.longitude, created.date())
+    help_data = nearby_help(r.latitude, r.longitude)
+    try:
+        plan = generate_response_plan(r.original_description, r.latitude, r.longitude, (context.get("resolved_place") or {}).get("name"), context, help_data.get("resources", []))
+    except Exception as exc:
+        raise HTTPException(502, f"Response plan generation failed: {type(exc).__name__}")
+    return {"report_id": str(r.id), "review_status": r.review_status, "ai_category": r.ai_category, **plan}
 @app.get("/api/admin/reports")
 def admin_reports(db: Session=Depends(get_db)):
-    reports = db.query(Report).order_by(Report.created_at.desc()).all()
+    reports = db.query(Report).filter(Report.review_status != "rejected").order_by(Report.created_at.desc()).all()
     return [{"report_id": str(r.id), "description": r.original_description, "latitude": r.latitude, "longitude": r.longitude, "accuracy_m": r.location_accuracy_m, "created_at": r.created_at, "review_status": r.review_status, "ai_processing_status": r.ai_processing_status, "ai_category": r.ai_category} for r in reports]
 @app.patch("/api/admin/reports/{report_id}/review")
 def update_review(report_id: uuid.UUID, update: ReviewUpdate, db: Session=Depends(get_db)):

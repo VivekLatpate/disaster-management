@@ -25,6 +25,10 @@ Open `http://127.0.0.1:8000/admin` to view reports on a map. Marker colors repre
 
 The nearby-help endpoint is `GET /api/admin/reports/<report-id>/nearby-help`. It searches for nearby emergency helplines, fire stations, shelters/safe spaces, hospitals, police, and disaster-control contacts. Results are leads for admin verification, not guaranteed live services or safe locations.
 
+## React frontend
+
+The separate React frontend is in `frontend/`. Run `cd frontend; npm install; npm run dev`, then open http://localhost:5173. It connects to the FastAPI backend at `http://127.0.0.1:8000`; set `VITE_API_URL` if the backend is hosted elsewhere.
+
 ## Tests
 
 `pytest -q`
