@@ -3,6 +3,12 @@ import httpx
 from .config import settings
 import re
 
+def _clean_search_text(value: str) -> str:
+    value = re.sub(r"!\[[^]]*\]\([^)]*\)", "", value or "")
+    value = re.sub(r"\[[^]]*\]\([^)]*\)", "", value)
+    value = re.sub(r"[#*_`|]+", " ", value)
+    return re.sub(r"\s+", " ", value).strip()
+
 def _items(payload: dict) -> list:
     data = payload.get("data")
     candidates = [payload.get("news"), payload.get("web"), payload.get("results"), data.get("news") if isinstance(data, dict) else None, data.get("web") if isinstance(data, dict) else None, data.get("results") if isinstance(data, dict) else None, data if isinstance(data, list) else None]
@@ -60,20 +66,36 @@ def cross_check(latitude: float, longitude: float, report_date: date) -> dict:
         result["warnings"].append("FIRECRAWL_API_KEY is not configured")
     return result
 
-def nearby_help(latitude: float, longitude: float, place: str | None = None) -> dict:
+def nearby_help(latitude: float, longitude: float, place: str | None = None, incident_description: str = "") -> dict:
     if not settings.firecrawl_api_key:
         return {"resources": [], "warnings": ["FIRECRAWL_API_KEY is not configured"], "disclaimer": "Confirm every phone number, address, opening status, and safety instruction with an official source before relying on it."}
     area = place or f"{latitude:.5f}, {longitude:.5f}"
-    query = f"{area} emergency helpline fire station shelter safe space hospital police disaster control room contact number"
+    campus_related = bool(re.search(r"\b(college|campus|university|hostel|school|student|institute)\b", incident_description, re.I))
+    query = f"{area} {'college campus university official contact number ' if campus_related else ''} emergency helpline fire station shelter safe space hospital police disaster control room contact number"
     try:
         r = httpx.post("https://api.firecrawl.dev/v2/search", headers={"Authorization": f"Bearer {settings.firecrawl_api_key}", "Content-Type": "application/json"}, json={"query": query, "limit": 10, "sources": [{"type": "web"}]}, timeout=30)
         r.raise_for_status(); items = _items(r.json())
-        resources = [
-            {"category": "All emergencies", "title": "India emergency number 112", "contact": "112", "url": "https://112.gov.in/", "description": "Police, fire, ambulance and emergency response."},
-            {"category": "Fire", "title": "Fire emergency", "contact": "101", "url": "https://www.india.gov.in/directory/helpline", "description": "India national fire emergency number."},
-            {"category": "Ambulance", "title": "Ambulance emergency", "contact": "108 / 102", "url": "https://www.india.gov.in/directory/helpline", "description": "Emergency ambulance services; confirm local availability."},
-            {"category": "Disaster control", "title": "Disaster management helpline", "contact": "1070 / 1077", "url": "https://www.india.gov.in/directory/helpline", "description": "Disaster-control numbers; confirm the applicable district or state contact."},
+        local = []
+        if campus_related:
+            for x in items:
+                title = _clean_search_text(x.get("title") or "")
+                url = str(x.get("url", "")).lower()
+                if any(k in (title + " " + url) for k in ["college", "university", "institute", "campus"]) and (".edu" in url or ".ac.in" in url or ".edu.in" in url or ".gov.in" in url):
+                    desc = _clean_search_text(x.get("description") or x.get("snippet") or "")
+                    contacts = ", ".join(dict.fromkeys(re.findall(r"\b(?:\d{3,5}[- ]?)?\d{3,4}[- ]?\d{3,5}\b", desc)))
+                    local.append({"category": "College / campus", "title": title[:100] or "College emergency contact", "contact": contacts[:80], "url": x.get("url"), "description": (f"Contact: {contacts}. " if contacts else "Official institution contact lead. ") + desc[:140]})
+                    break
+        national = [
+            {"category": "National emergency", "title": "India emergency number 112", "contact": "112", "url": "https://112.gov.in/", "description": "Police, fire, ambulance and emergency response."},
+            {"category": "National fire", "title": "Fire emergency", "contact": "101", "url": "https://www.india.gov.in/directory/helpline", "description": "India national fire emergency number."},
         ]
+        for x in items:
+            url = str(x.get("url", "")).lower()
+            if (".gov.in" in url or ".nic.in" in url) and "india.gov.in/directory/helpline" not in url and len(local) < 2:
+                desc = _clean_search_text(x.get("description") or x.get("snippet") or "")
+                contacts = ", ".join(dict.fromkeys(re.findall(r"\b(?:\d{3,5}[- ]?)?\d{3,4}[- ]?\d{3,5}\b", desc)))
+                local.append({"category": "Local official source", "title": _clean_search_text(x.get("title") or "Local emergency contact")[:100], "contact": contacts[:80], "url": x.get("url"), "description": (f"Contact: {contacts}. " if contacts else "Official local emergency information. ") + desc[:140]})
+        resources = (local + national)[:4]
         return {"place": area, "search_query": query, "resources": resources, "warnings": [] if resources else ["No nearby resources found; check official local government and emergency-service websites"], "disclaimer": "Search results are leads for admin verification. Do not assume a place is open, safe, nearby, or able to receive people without confirming it."}
     except Exception as exc:
         return {"place": area, "search_query": query, "resources": [], "warnings": [f"Firecrawl unavailable: {type(exc).__name__}"], "disclaimer": "Confirm every phone number, address, opening status, and safety instruction with an official source before relying on it."}

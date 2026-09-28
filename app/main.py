@@ -85,13 +85,13 @@ def admin_nearby_help(report_id: uuid.UUID, db: Session=Depends(get_db)):
             w = httpx.get(f"{settings.weatherapi_base_url}/current.json", params={"key": settings.weatherapi, "q": f"{r.latitude},{r.longitude}", "aqi": "no"}, timeout=15).json()
             loc = w.get("location", {}); place = ", ".join(x for x in [loc.get("name"), loc.get("region"), loc.get("country")] if x)
         except Exception: pass
-    return {"report_id": str(r.id), "coordinates": {"latitude": r.latitude, "longitude": r.longitude}, **nearby_help(r.latitude, r.longitude, place)}
+    return {"report_id": str(r.id), "coordinates": {"latitude": r.latitude, "longitude": r.longitude}, **nearby_help(r.latitude, r.longitude, place, r.original_description)}
 @app.get("/api/admin/reports/{report_id}/context")
 def admin_context(report_id: uuid.UUID, db: Session=Depends(get_db)):
     r = db.get(Report, report_id)
     if not r: raise HTTPException(404, "Report not found")
     created = r.created_at if r.created_at.tzinfo else r.created_at.replace(tzinfo=timezone.utc)
-    return {"report_id": str(r.id), **cross_check(r.latitude, r.longitude, created.date()), **nearby_help(r.latitude, r.longitude)}
+    return {"report_id": str(r.id), **cross_check(r.latitude, r.longitude, created.date()), **nearby_help(r.latitude, r.longitude, None, r.original_description)}
 @app.get("/api/admin/reports/{report_id}/response-plan")
 def admin_response_plan(report_id: uuid.UUID, db: Session=Depends(get_db)):
     r = db.get(Report, report_id)
