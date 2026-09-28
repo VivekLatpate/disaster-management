@@ -1,5 +1,59 @@
 # Disaster incident reporting
 
+## Clone and run for teammates
+
+```powershell
+git clone https://github.com/VivekLatpate/disaster-management.git
+cd disaster-management
+```
+
+Create the local environment file. Never commit `.env`:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` and add the provider keys your local machine needs: `GEMINI_API_KEY`, `ASSEMBLYAI_API_KEY`, `firecrawl_api_key`, and `weatherapi`. Provider keys are used only by the backend and must not be placed in React code.
+
+### Backend
+
+Install Python 3.11+ and Docker Desktop, then run:
+
+```powershell
+py -m venv .venv
+.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+docker compose up -d db
+alembic upgrade head
+uvicorn app.main:app --reload
+```
+
+The API and the original server-rendered page are available at http://127.0.0.1:8000. API documentation is at http://127.0.0.1:8000/docs.
+
+### React frontend
+
+Open a second terminal:
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+Open http://localhost:5173. The React app uses `http://127.0.0.1:8000` by default. To use another backend URL, create `frontend/.env` with:
+
+```env
+VITE_API_URL=http://127.0.0.1:8000
+```
+
+Run tests from the repository root:
+
+```powershell
+.venv\Scripts\python.exe -m pytest -q -p no:cacheprovider tests
+```
+
+If the browser shows CORS errors, confirm that FastAPI is running on port 8000 and that the React app is running on port 5173. If GPS or microphone access is denied, use manual coordinates or typed description; deployed GPS/microphone access requires HTTPS.
+
 This is an English-only FastAPI service for submitting one incident photo with a resident's description and coordinates. The original description is never changed. `review_status` is independent from `ai_processing_status`; Gemini output is only an unverified suggestion.
 
 ## Run locally
